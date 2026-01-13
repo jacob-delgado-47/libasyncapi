@@ -1,0 +1,11 @@
+name: SharedMessage
+title: Shared Message
+summary: A message defined in an external file
+contentType: application/json
+payload:
+  type: object
+  properties:
+    id:
+      type: string
+    data:
+      type: string

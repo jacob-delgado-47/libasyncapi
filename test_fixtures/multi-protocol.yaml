@@ -1,0 +1,387 @@
+asyncapi: 3.0.0
+info:
+  title: Multi-Protocol API
+  version: 2.0.0
+  description: |
+    An API demonstrating multiple protocol bindings
+    and comprehensive AsyncAPI 3.0 features.
+  contact:
+    name: Engineering Team
+    email: engineering@example.com
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+  tags:
+    - name: multi-protocol
+    - name: demo
+  x-custom-extension: custom value
+
+id: urn:com:example:multi-protocol-api
+
+defaultContentType: application/json
+
+servers:
+  production-kafka:
+    host: kafka.production.example.com:9092
+    protocol: kafka-secure
+    description: Production Kafka cluster
+    tags:
+      - name: env:production
+    bindings:
+      kafka:
+        schemaRegistryUrl: https://schema-registry.production.example.com
+        schemaRegistryVendor: confluent
+        bindingVersion: 0.5.0
+
+  staging-mqtt:
+    host: mqtt.staging.example.com:8883
+    protocol: secure-mqtt
+    description: Staging MQTT broker
+    bindings:
+      mqtt:
+        clientId: multi-protocol-client
+        cleanSession: true
+        keepAlive: 60
+        bindingVersion: 0.2.0
+
+  development-http:
+    host: localhost:8080
+    protocol: http
+    description: Local HTTP server for development
+    bindings:
+      http: {}
+
+channels:
+  userEvents:
+    address: events/users/{userId}
+    description: User-related events channel
+    parameters:
+      userId:
+        $ref: '#/components/parameters/userId'
+    messages:
+      userCreated:
+        $ref: '#/components/messages/userCreated'
+      userUpdated:
+        $ref: '#/components/messages/userUpdated'
+    bindings:
+      kafka:
+        topic: user-events
+        partitions: 12
+        replicas: 3
+        topicConfiguration:
+          cleanupPolicy:
+            - delete
+            - compact
+          retentionMs: 604800000
+        bindingVersion: 0.5.0
+
+  orderQueue:
+    address: orders/{orderId}
+    description: Order processing queue
+    parameters:
+      orderId:
+        description: The unique order identifier
+    messages:
+      orderPlaced:
+        $ref: '#/components/messages/orderPlaced'
+    bindings:
+      amqp:
+        is: queue
+        queue:
+          name: orders-queue
+          durable: true
+          exclusive: false
+          autoDelete: false
+          vhost: /production
+        bindingVersion: 0.3.0
+
+  notifications:
+    address: /notifications
+    description: WebSocket notifications channel
+    messages:
+      notification:
+        $ref: '#/components/messages/notification'
+    bindings:
+      ws:
+        method: GET
+        bindingVersion: 0.1.0
+
+operations:
+  publishUserCreated:
+    action: send
+    channel:
+      $ref: '#/channels/userEvents'
+    summary: Publish user created event
+    description: Publishes an event when a new user is created
+    security:
+      - $ref: '#/components/securitySchemes/oauth2'
+    traits:
+      - $ref: '#/components/operationTraits/kafkaCommon'
+    messages:
+      - $ref: '#/channels/userEvents/messages/userCreated'
+
+  receiveUserUpdated:
+    action: receive
+    channel:
+      $ref: '#/channels/userEvents'
+    summary: Receive user updated events
+    messages:
+      - $ref: '#/channels/userEvents/messages/userUpdated'
+    bindings:
+      kafka:
+        groupId:
+          type: string
+          enum:
+            - user-service-group
+        clientId:
+          type: string
+        bindingVersion: 0.5.0
+
+  processOrder:
+    action: receive
+    channel:
+      $ref: '#/channels/orderQueue'
+    summary: Process incoming orders
+    messages:
+      - $ref: '#/channels/orderQueue/messages/orderPlaced'
+    bindings:
+      amqp:
+        expiration: 60000
+        priority: 5
+        deliveryMode: 2
+        mandatory: true
+        ack: true
+        bindingVersion: 0.3.0
+
+  sendNotification:
+    action: send
+    channel:
+      $ref: '#/channels/notifications'
+    summary: Send real-time notifications
+    messages:
+      - $ref: '#/channels/notifications/messages/notification'
+    bindings:
+      http:
+        method: POST
+        bindingVersion: 0.3.0
+
+components:
+  schemas:
+    User:
+      type: object
+      required:
+        - id
+        - email
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+
+    Order:
+      type: object
+      required:
+        - orderId
+        - items
+      properties:
+        orderId:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+        total:
+          type: number
+          format: double
+
+    OrderItem:
+      type: object
+      properties:
+        productId:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+        price:
+          type: number
+
+    Notification:
+      type: object
+      properties:
+        type:
+          type: string
+          enum:
+            - info
+            - warning
+            - error
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+
+    CommonHeaders:
+      type: object
+      properties:
+        correlationId:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+
+  messages:
+    userCreated:
+      name: userCreated
+      title: User Created
+      summary: Event published when a new user is created
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/commonHeaders'
+      payload:
+        $ref: '#/components/schemas/User'
+      bindings:
+        kafka:
+          key:
+            type: string
+            description: User ID as the message key
+          bindingVersion: 0.5.0
+
+    userUpdated:
+      name: userUpdated
+      title: User Updated
+      summary: Event published when a user is updated
+      contentType: application/json
+      traits:
+        - $ref: '#/components/messageTraits/commonHeaders'
+      payload:
+        $ref: '#/components/schemas/User'
+
+    orderPlaced:
+      name: orderPlaced
+      title: Order Placed
+      summary: Event published when an order is placed
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/Order'
+      bindings:
+        amqp:
+          contentEncoding: utf-8
+          messageType: order.placed
+          bindingVersion: 0.3.0
+
+    notification:
+      name: notification
+      title: Notification
+      summary: Real-time notification message
+      contentType: application/json
+      payload:
+        $ref: '#/components/schemas/Notification'
+      bindings:
+        http:
+          headers:
+            type: object
+            properties:
+              X-Notification-Type:
+                type: string
+          bindingVersion: 0.3.0
+
+  parameters:
+    userId:
+      description: The unique user identifier
+      examples:
+        - user-123
+        - user-456
+
+  securitySchemes:
+    oauth2:
+      type: oauth2
+      description: OAuth2 authentication
+      flows:
+        clientCredentials:
+          tokenUrl: https://auth.example.com/oauth/token
+          scopes:
+            read:users: Read user data
+            write:users: Write user data
+
+    apiKey:
+      type: apiKey
+      description: API key authentication
+      in: header
+      name: X-API-Key
+
+  operationTraits:
+    kafkaCommon:
+      bindings:
+        kafka:
+          groupId:
+            type: string
+          clientId:
+            type: string
+            description: Unique client identifier
+          bindingVersion: 0.5.0
+
+  messageTraits:
+    commonHeaders:
+      headers:
+        $ref: '#/components/schemas/CommonHeaders'
+      correlationId:
+        location: $message.header#/correlationId
+
+  serverVariables:
+    environment:
+      default: production
+      enum:
+        - production
+        - staging
+        - development
+      description: Deployment environment
+
+  correlationIds:
+    orderCorrelation:
+      description: Correlation ID for order tracking
+      location: $message.header#/correlationId
+
+  serverBindings:
+    kafkaBinding:
+      kafka:
+        schemaRegistryUrl: https://registry.example.com
+        bindingVersion: 0.5.0
+
+  channelBindings:
+    kafkaChannelBinding:
+      kafka:
+        topic: example-topic
+        partitions: 6
+        bindingVersion: 0.5.0
+
+  operationBindings:
+    kafkaOperationBinding:
+      kafka:
+        groupId:
+          type: string
+        bindingVersion: 0.5.0
+
+  messageBindings:
+    kafkaMessageBinding:
+      kafka:
+        key:
+          type: string
+        bindingVersion: 0.5.0
+
+  tags:
+    user-events:
+      name: user-events
+      description: User-related events
+
+  externalDocs:
+    apiDocs:
+      description: Full API documentation
+      url: https://docs.example.com/api
